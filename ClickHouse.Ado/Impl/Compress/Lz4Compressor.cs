@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.IO;
 using ClickHouse.Ado.Impl.Data;
-using LZ4;
+using K4os.Compression.LZ4;
+using K4os.Compression.LZ4.Streams;
 
 namespace ClickHouse.Ado.Impl.Compress {
     internal class Lz4Compressor : HashingCompressor {
@@ -13,14 +14,15 @@ namespace ClickHouse.Ado.Impl.Compress {
 
         public override CompressionMethod Method => _useHc ? CompressionMethod.Lz4Hc : CompressionMethod.Lz4;
 
+        private LZ4Level Level => _useHc ? LZ4Level.L09_HC : LZ4Level.L00_FAST;
+
         protected override byte[] Compress(MemoryStream uncompressed) {
-            var output = new MemoryStream();
-            output.Write(Header, 0, Header.Length);
-            var compressed = _useHc ? LZ4Codec.EncodeHC(uncompressed.ToArray(), 0, (int) uncompressed.Length) : LZ4Codec.Encode(uncompressed.ToArray(), 0, (int) uncompressed.Length);
-            output.Write(BitConverter.GetBytes(compressed.Length + 9), 0, 4);
-            output.Write(BitConverter.GetBytes(uncompressed.Length), 0, 4);
-            output.Write(compressed, 0, compressed.Length);
-            return output.ToArray();
+            using (var output = new MemoryStream())
+            using (var encoder = LZ4Stream.Encode(output, Level))
+            {
+                uncompressed.CopyTo(encoder);
+                return output.ToArray();
+            }
         }
 
         protected override byte[] Decompress(Stream compressed, out UInt128 compressedHash) {
@@ -44,7 +46,14 @@ namespace ClickHouse.Ado.Impl.Compress {
             } while (read < compressedSize);
 
             compressedHash = ClickHouseCityHash.CityHash128(compressedBytes);
-            return LZ4Codec.Decode(compressedBytes, header.Length, compressedSize, uncompressedSize);
+            //return LZ4Codec.Decode(compressedBytes, header.Length, compressedSize, uncompressedSize);
+            using (var output = new MemoryStream())
+            using (var encoder = LZ4Stream.Decode(output))
+            {
+                compressed.CopyTo(encoder);
+                return output.ToArray();
+            }
+
         }
     }
 }
